@@ -24,8 +24,26 @@ export interface DownloaderResponse {
   error?: string;
 }
 
+export interface SpotifyTrack {
+  name: string;
+  artist: string;
+  durationMs: number;
+  thumbnail?: string;
+  downloadStatus?: 'idle' | 'downloading' | 'completed' | 'failed';
+}
+
+export interface SpotifyResponse {
+  success: boolean;
+  platform: 'Spotify';
+  title: string;
+  thumbnail: string;
+  description: string;
+  tracks: SpotifyTrack[];
+}
+
 export interface DownloaderState {
   loading: boolean;
   error: string | null;
   data: DownloaderResponse | null;
+  spotifyData: SpotifyResponse | null;
 }

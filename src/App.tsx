@@ -3,6 +3,7 @@ import { useMediaDownloader } from './hooks/useMediaDownloader';
 import { Header } from './components/Header';
 import { SearchInput } from './components/SearchInput';
 import { ResultDetails } from './components/ResultDetails';
+import { SpotifyDetails } from './components/SpotifyDetails';
 import { Footer } from './components/Footer';
 
 export default function App() {
@@ -12,8 +13,10 @@ export default function App() {
     loading,
     error,
     data,
+    spotifyData,
     downloadMedia,
-    downloadSpotifyPlaylist,
+    fetchSpotifyInfo,
+    downloadSpotifyTracksAsZip,
     clearResult,
   } = useMediaDownloader();
 
@@ -63,7 +66,7 @@ export default function App() {
             loading={loading}
             onSubmit={(u) => {
               if (u.includes('spotify.com')) {
-                downloadSpotifyPlaylist(u);
+                fetchSpotifyInfo(u);
               } else {
                 downloadMedia(u);
               }
@@ -92,9 +95,16 @@ export default function App() {
 
           {/* Success States - Extracted Result details */}
           {data && <ResultDetails data={data} />}
+          {spotifyData && (
+            <SpotifyDetails 
+              data={spotifyData} 
+              onDownloadZip={downloadSpotifyTracksAsZip} 
+              loading={loading} 
+            />
+          )}
 
           {/* If no interactions yet, present some clean tips */}
-          {!data && !loading && (
+          {!data && !spotifyData && !loading && (
             <div className="w-full max-w-xl mx-auto px-4 mt-8">
               <div className="p-6 rounded-2xl bg-slate-900/40 border border-slate-800/80 text-slate-400 space-y-4 shadow-xl">
                 <div className="flex items-center gap-2 text-white font-bold text-xs uppercase tracking-wider font-mono">

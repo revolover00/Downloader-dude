@@ -2,7 +2,11 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { downloadMediaController } from './server/downloadController';
-import { downloadSpotifyPlaylist } from './server/spotifyService';
+import { 
+  downloadSpotifyPlaylist, 
+  spotifyPlaylistInfoController, 
+  downloadTrackController 
+} from './server/spotifyService';
 
 async function startServer() {
   const app = express();
@@ -14,6 +18,8 @@ async function startServer() {
   // API router
   app.post('/api/download', downloadMediaController);
   app.post('/api/spotify/download-playlist', downloadSpotifyPlaylist);
+  app.post('/api/spotify/playlist-info', spotifyPlaylistInfoController);
+  app.get('/api/spotify/download-track', downloadTrackController);
 
   // Health check endpoint
   app.get('/api/health', (req, res) => {
