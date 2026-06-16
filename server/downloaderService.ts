@@ -37,35 +37,41 @@ export async function processDownload(url: string): Promise<DownloaderResponse> 
     throw new Error('Please enter a valid URL (starting with http:// or https://)');
   }
 
-  // Explicitly check for Spotify and return the specific error message
-  /* Removed Spotify exclusion to enable Spotify downloading */
+  console.log(`[processDownload] Attempting to download: ${url}`);
+  try {
+    const result: DownloadResult = await downloadMedia(url);
+    console.log(`[processDownload] Result from mediasnap:`, JSON.stringify(result));
 
-  const result: DownloadResult = await downloadMedia(url);
+    if (!result || !result.success) {
+      console.log(`[processDownload] mediasnap returned failure:`, result?.error);
+      throw new Error(result?.error || 'Unsupported platform or download failed. Please double check the URL and try again.');
+    }
 
-  if (!result || !result.success) {
-    throw new Error(result?.error || 'Unsupported platform or download failed. Please double check the URL and try again.');
+    const options = (result.media || []).map((item) => ({
+      url: item.url,
+      quality: item.quality || item.format || 'Default',
+      type: item.type as 'video' | 'audio' | 'image' || 'video',
+    }));
+
+    // Clean or normalize platform casing
+    let platformName = result.platform || 'Unknown';
+    if (platformName && typeof platformName === 'string') {
+      platformName = platformName.charAt(0).toUpperCase() + platformName.slice(1);
+    }
+
+    return {
+      success: true,
+      platform: platformName,
+      title: result.title || 'Untitled Media',
+      description: result.description,
+      thumbnail: result.thumbnail,
+      duration: result.duration,
+      media: result.media || [],
+      options,
+    };
+  } catch (err: any) {
+    console.error(`[processDownload] Error for ${url}:`, err);
+    throw err;
   }
-
-  const options = (result.media || []).map((item) => ({
-    url: item.url,
-    quality: item.quality || item.format || 'Default',
-    type: item.type as 'video' | 'audio' | 'image' || 'video',
-  }));
-
-  // Clean or normalize platform casing
-  let platformName = result.platform || 'Unknown';
-  if (platformName && typeof platformName === 'string') {
-    platformName = platformName.charAt(0).toUpperCase() + platformName.slice(1);
-  }
-
-  return {
-    success: true,
-    platform: platformName,
-    title: result.title || 'Untitled Media',
-    description: result.description,
-    thumbnail: result.thumbnail,
-    duration: result.duration,
-    media: result.media || [],
-    options,
-  };
 }
+
