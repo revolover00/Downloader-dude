@@ -19,16 +19,14 @@ export function SpotifyDetails({ data, onDownloadZip, loading }: SpotifyDetailsP
       const searchQ = `${track.name} ${track.artist} audio`;
       const downloadUrl = `/api/spotify/download-track?q=${encodeURIComponent(searchQ)}&name=${encodeURIComponent(track.name)}&artist=${encodeURIComponent(track.artist)}`;
       
-      // Use iframe or hidden anchor to trigger standard browser direct download
-      const iframe = document.createElement('iframe');
-      iframe.style.display = 'none';
-      iframe.src = downloadUrl;
-      document.body.appendChild(iframe);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.setAttribute('download', `${track.name} - ${track.artist}.mp3`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
       
-      setTimeout(() => {
-        document.body.removeChild(iframe);
-        setTrackStatus(prev => ({ ...prev, [index]: 'completed' }));
-      }, 5000);
+      setTrackStatus(prev => ({ ...prev, [index]: 'completed' }));
     } catch (e) {
       console.error(e);
       setTrackStatus(prev => ({ ...prev, [index]: 'idle' }));

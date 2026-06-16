@@ -133,7 +133,7 @@ export function ResultDetails({ data }: ResultDetailsProps) {
                     </button>
 
                     <a
-                      href={option.url}
+                      href={`/api/proxy-download?url=${encodeURIComponent(option.url)}&name=${encodeURIComponent(data.title || 'download')}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="flex-1 sm:flex-initial px-5 py-2.5 text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md shadow-indigo-950/20 active:scale-[0.98]"

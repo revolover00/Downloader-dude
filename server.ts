@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import { downloadMediaController } from './server/downloadController';
+import { downloadMediaController, proxyDownloadController } from './server/downloadController';
 import { 
   downloadSpotifyPlaylist, 
   spotifyPlaylistInfoController, 
@@ -17,6 +17,7 @@ async function startServer() {
 
   // API router
   app.post('/api/download', downloadMediaController);
+  app.get('/api/proxy-download', proxyDownloadController);
   app.post('/api/spotify/download-playlist', downloadSpotifyPlaylist);
   app.post('/api/spotify/playlist-info', spotifyPlaylistInfoController);
   app.get('/api/spotify/download-track', downloadTrackController);
