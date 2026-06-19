@@ -1,11 +1,8 @@
 import { Request, Response } from 'express';
-import ytdlPlus from 'ytdl-plus';
-import archiver from 'archiver';
 import axios from 'axios';
-import * as cheerio from 'cheerio';
 import { Readable } from 'stream';
-
-const ytdl = ytdlPlus;
+import { ZipArchive } from 'archiver';
+import ytdl from 'ytdl-plus';
 
 export function getSpotifyEmbedUrl(url: string): string {
   const cleanUrl = url.split('?')[0];
@@ -15,143 +12,174 @@ export function getSpotifyEmbedUrl(url: string): string {
   return `https://open.spotify.com/embed/${type}/${id}`;
 }
 
-/**
- * Controller to extract tracks instantly from the Spotify URL via web scraping
- */
+// Cache the access token to avoid re-fetching on every request
+let spotifyTokenCache: { token: string; expiresAt: number } | null = null;
+
+async function getSpotifyAccessToken(): Promise<string> {
+  const now = Date.now();
+  if (spotifyTokenCache && spotifyTokenCache.expiresAt > now + 60_000) {
+    return spotifyTokenCache.token;
+  }
+
+  const clientId = process.env.SPOTIFY_CLIENT_ID;
+  const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
+
+  if (!clientId || !clientSecret) {
+    throw new Error(
+      'SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET must be set in your .env file. ' +
+      'Get them from https://developer.spotify.com/dashboard'
+    );
+  }
+
+  const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+  const tokenRes = await axios.post(
+    'https://accounts.spotify.com/api/token',
+    'grant_type=client_credentials',
+    {
+      headers: {
+        'Authorization': `Basic ${credentials}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      timeout: 8000,
+    }
+  );
+
+  const { access_token, expires_in } = tokenRes.data;
+  spotifyTokenCache = { token: access_token, expiresAt: now + expires_in * 1000 };
+  return access_token;
+}
+
+function parseSpotifyId(url: string): { type: 'track' | 'album' | 'playlist'; id: string } | null {
+  const match = url.match(/spotify\.com\/(track|album|playlist)\/([a-zA-Z0-9]+)/);
+  if (!match) return null;
+  return { type: match[1] as 'track' | 'album' | 'playlist', id: match[2] };
+}
+
 export async function spotifyPlaylistInfoController(req: Request, res: Response) {
   const { url } = req.body;
   if (!url || typeof url !== 'string') {
     return res.status(400).json({ error: 'A valid Spotify URL is required.' });
   }
 
+  const parsed = parseSpotifyId(url.trim());
+  if (!parsed) {
+    return res.status(400).json({ error: 'Could not parse Spotify URL. Provide a track, album, or playlist link.' });
+  }
+
   try {
-    const embedUrl = getSpotifyEmbedUrl(url.trim());
-    console.log(`Scraping Spotify Embed Page: ${embedUrl}`);
-    
-    const response = await axios.get(embedUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9'
-      },
-      timeout: 10000
-    });
+    const token = await getSpotifyAccessToken();
+    const apiBase = 'https://api.spotify.com/v1';
+    const headers = { Authorization: `Bearer ${token}` };
 
-    const $ = cheerio.load(response.data);
-    const title = $('meta[property="og:title"]').attr('content') || $('title').text() || 'Spotify Media';
-    const thumbnail = $('meta[property="og:image"]').attr('content') || '';
-    const description = $('meta[property="og:description"]').attr('content') || '';
-
-    let parsedData = null;
-    const rawInitialState = $('#initial-state').html() || $('#initial-state').text();
-    if (rawInitialState) {
-      try {
-        const decoded = decodeURIComponent(rawInitialState.trim());
-        parsedData = JSON.parse(decoded);
-      } catch (e) {
-        try {
-          parsedData = JSON.parse(rawInitialState.trim());
-        } catch (err) {}
-      }
-    }
-
-    if (!parsedData) {
-      const rawResource = $('#resource').html() || $('#resource').text();
-      if (rawResource) {
-        try {
-          parsedData = JSON.parse(rawResource.trim());
-        } catch (e) {}
-      }
-    }
-
-    const tracks: any[] = [];
-    
-    function recurse(value: any) {
-      if (!value || typeof value !== 'object') return;
-      
-      if (value.type === 'track' && typeof value.name === 'string') {
-        const name = value.name;
-        let artist = 'Unknown Artist';
-        if (Array.isArray(value.artists)) {
-          artist = value.artists.map((a: any) => a.name).join(', ');
-        } else if (typeof value.artists === 'string') {
-          artist = value.artists;
-        } else if (typeof value.subtitle === 'string') {
-          artist = value.subtitle;
-        } else if (value.artists && typeof value.artists.name === 'string') {
-          artist = value.artists.name;
-        }
-        
-        const durationMs = value.duration_ms || value.duration || 0;
-        const itemThumb = value.album?.images?.[0]?.url || value.coverUrl || thumbnail;
-
-        if (!tracks.some(t => t.name.toLowerCase() === name.toLowerCase() && t.artist.toLowerCase() === artist.toLowerCase())) {
-          tracks.push({ name, artist, durationMs, thumbnail: itemThumb });
-        }
-      }
-      
-      if (Array.isArray(value)) {
-        for (const item of value) {
-          recurse(item);
-        }
-      } else {
-        for (const key of Object.keys(value)) {
-          recurse(value[key]);
-        }
-      }
-    }
-
-    if (parsedData) {
-      recurse(parsedData);
-    }
-
-    // Fallback scraping from UI list elements if empty
-    if (tracks.length === 0) {
-      $('li, [data-testid="track-row"], .track-row').each((_i, el) => {
-        const trackTitle = $(el).find('[data-testid="track-title"], .track-name, h4, .title').text().trim();
-        let trackArtist = $(el).find('[data-testid="track-artists"], .artist-name, p, .artist').text().trim();
-        if (trackTitle) {
-          if (!trackArtist) trackArtist = 'Unknown Artist';
-          tracks.push({
-            name: trackTitle,
-            artist: trackArtist,
-            durationMs: 0,
-            thumbnail: thumbnail
-          });
-        }
+    if (parsed.type === 'track') {
+      const { data } = await axios.get(`${apiBase}/tracks/${parsed.id}`, { headers, timeout: 8000 });
+      return res.json({
+        success: true,
+        platform: 'Spotify',
+        title: data.name,
+        thumbnail: data.album?.images?.[0]?.url || '',
+        description: `${data.artists?.map((a: any) => a.name).join(', ')} · ${data.album?.name}`,
+        tracks: [{
+          name: data.name,
+          artist: data.artists?.map((a: any) => a.name).join(', ') || 'Unknown Artist',
+          durationMs: data.duration_ms || 0,
+          thumbnail: data.album?.images?.[0]?.url || '',
+        }],
       });
     }
 
-    // Single track parsing fallback
-    if (tracks.length === 0 && url.includes('/track/')) {
-      let songArtist = 'Unknown Artist';
-      if (description) {
-        const descParts = description.split(' · ');
-        if (descParts.length > 1) {
-          songArtist = descParts[1];
-        } else if (description.includes('by ')) {
-          songArtist = description.split('by ')[1];
-        }
-      }
-      tracks.push({
-        name: title,
-        artist: songArtist,
-        durationMs: 0,
-        thumbnail: thumbnail
+    if (parsed.type === 'album') {
+      const { data: album } = await axios.get(`${apiBase}/albums/${parsed.id}`, { headers, timeout: 8000 });
+      const albumThumb = album.images?.[0]?.url || '';
+      const tracks = (album.tracks?.items || []).map((t: any) => ({
+        name: t.name,
+        artist: t.artists?.map((a: any) => a.name).join(', ') || 'Unknown Artist',
+        durationMs: t.duration_ms || 0,
+        thumbnail: albumThumb,
+      }));
+      return res.json({
+        success: true,
+        platform: 'Spotify',
+        title: album.name,
+        thumbnail: albumThumb,
+        description: `${album.artists?.[0]?.name} · ${album.total_tracks} tracks`,
+        tracks,
       });
     }
 
-    res.json({
+    // Playlist — paginate through all tracks (Spotify returns max 100 per page)
+    const { data: playlist } = await axios.get(`${apiBase}/playlists/${parsed.id}`, { headers, timeout: 8000 });
+    const playlistThumb = playlist.images?.[0]?.url || '';
+    const allTracks: any[] = [];
+
+    let tracksUrl: string | null = `${apiBase}/playlists/${parsed.id}/tracks?limit=100&fields=next,items(track(name,duration_ms,artists,album(images)))`;
+    while (tracksUrl) {
+      const { data: page } = await axios.get(tracksUrl, { headers, timeout: 10000 });
+      for (const item of page.items || []) {
+        if (!item.track || item.track.type === 'episode') continue;
+        allTracks.push({
+          name: item.track.name,
+          artist: item.track.artists?.map((a: any) => a.name).join(', ') || 'Unknown Artist',
+          durationMs: item.track.duration_ms || 0,
+          thumbnail: item.track.album?.images?.[0]?.url || playlistThumb,
+        });
+      }
+      tracksUrl = page.next || null;
+    }
+
+    return res.json({
       success: true,
       platform: 'Spotify',
-      title,
-      thumbnail,
-      description,
-      tracks
+      title: playlist.name,
+      thumbnail: playlistThumb,
+      description: `${playlist.owner?.display_name} · ${allTracks.length} tracks`,
+      tracks: allTracks,
     });
+
   } catch (err: any) {
-    console.error('Error fetching Spotify playlist meta:', err);
-    res.status(500).json({ error: 'Failed to parse Spotify page. Please check the URL quality.' });
+    const status = err?.response?.status;
+    if (status === 401) {
+      spotifyTokenCache = null;
+      return res.status(401).json({ error: 'Spotify auth failed. Check your SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET.' });
+    }
+    if (status === 404) {
+      return res.status(404).json({ error: 'Spotify content not found. Make sure the link is to public content.' });
+    }
+    console.error('Spotify API error:', err?.response?.data || err.message);
+    return res.status(500).json({ error: 'Failed to fetch Spotify data. Please try again.' });
+  }
+}
+
+/**
+ * Highly robust YouTube Search function that pulls search results via ytdl-plus
+ */
+export async function searchYouTube(query: string): Promise<{ id: string; title: string }[]> {
+  console.log(`[YouTube Search] Querying via ytdl-plus: ${query}`);
+  try {
+    const results = await ytdl.search(query, { limit: 5 });
+    const videos = results
+      .filter(r => r.type === 'video' && r.id)
+      .map(r => ({ id: r.id, title: r.title }));
+    console.log(`[YouTube Search] Found ${videos.length} results.`);
+    return videos;
+  } catch (err: any) {
+    console.error('[YouTube Search Failed]:', err.message);
+    return [];
+  }
+}
+
+async function getYtAudioStream(youtubeUrl: string): Promise<NodeJS.ReadableStream | null> {
+  try {
+    console.log(`[ytdl-plus] Extracting audio stream for: ${youtubeUrl}`);
+    const { stream } = await ytdl.getStream(youtubeUrl, {
+      quality: 'highestaudio',
+      format: 'mp3',
+    });
+    // ytdl-plus returns a Web ReadableStream — convert to Node.js Readable for piping
+    return Readable.fromWeb(stream as any);
+  } catch (err: any) {
+    console.error('[ytdl-plus stream error]:', err.message);
+    return null;
   }
 }
 
@@ -168,30 +196,36 @@ export async function downloadTrackController(req: Request, res: Response) {
   }
 
   try {
-    console.log(`Searching YouTube for: ${query}`);
-    const results = await ytdl.search(query, { limit: 1 });
+    console.log(`Searching YouTube for track: ${query}`);
+    const results = await searchYouTube(query);
     
     if (!results || results.length === 0) {
       return res.status(404).json({ error: 'Track not found on YouTube.' });
     }
 
     const video = results[0];
-    console.log(`Found YouTube match: ${video.title} (${video.id})`);
+    const ytUrl = `https://www.youtube.com/watch?v=${video.id}`;
+    console.log(`Found YouTube match: ${video.title} (${video.id}), extracting audio source...`);
 
-    const { stream } = await ytdl.getStream(video.id, {
-      quality: 'highestaudio',
-      format: 'mp3',
+    const nodeStream = await getYtAudioStream(ytUrl);
+    if (!nodeStream) {
+      throw new Error('Could not extract audio stream. The video may be unavailable or region-locked.');
+    }
+
+    const safeFilename = `${trackName} - ${artistName}.mp3`;
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(safeFilename)}"`);
+
+    nodeStream.on('error', (err) => {
+      console.error('[downloadTrack] Stream error:', err.message);
+      if (!res.headersSent) res.status(500).json({ error: 'Stream interrupted.' });
     });
 
-    res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(trackName)} - ${encodeURIComponent(artistName)}.mp3"`);
-    
-    const nodeStream = Readable.fromWeb(stream as any);
     nodeStream.pipe(res);
   } catch (err: any) {
     console.error('Error during audio stream extraction:', err);
     if (!res.headersSent) {
-      res.status(500).json({ error: 'Stream extraction failed: ' + err.message });
+      res.status(500).json({ error: `Audio extraction failed: ${err.message || err}` });
     }
   }
 }
@@ -211,10 +245,10 @@ export async function downloadSpotifyPlaylist(req: Request, res: Response) {
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(archiveName)}.zip"`);
 
-    const archive = archiver('zip', { zlib: { level: 5 } });
+    const archive = new ZipArchive({ zlib: { level: 5 } });
     archive.pipe(res);
 
-    // Concurrent limits to respect standard CPU / memory guidelines on cloud environments
+    // Limit concurrency to respect memory limit guidelines on compute runtimes
     const batchSize = 3;
     for (let i = 0; i < tracks.length; i += batchSize) {
       const batch = tracks.slice(i, i + batchSize);
@@ -222,26 +256,25 @@ export async function downloadSpotifyPlaylist(req: Request, res: Response) {
       await Promise.all(batch.map(async (track: any) => {
         try {
           const query = `${track.name} ${track.artist} audio`;
-          const results = await ytdl.search(query, { limit: 1 });
+          const results = await searchYouTube(query);
           
           if (results && results.length > 0) {
-            const { stream } = await ytdl.getStream(results[0].id, {
-              quality: 'highestaudio',
-              format: 'mp3'
-            });
-
-            const nodeStream = Readable.fromWeb(stream as any);
-            const safeName = `${track.name.replace(/[/\\?%*:|"<>]/g, '')} - ${track.artist.replace(/[/\\?%*:|"<>]/g, '')}.mp3`;
+            const videoId = results[0].id;
+            const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
             
-            const chunks: any[] = [];
-            for await (const chunk of nodeStream) {
-              chunks.push(chunk);
+            const nodeStream = await getYtAudioStream(ytUrl);
+            if (nodeStream) {
+              const chunks: Buffer[] = [];
+              for await (const chunk of nodeStream as any) {
+                chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+              }
+              const buffer = Buffer.concat(chunks);
+              const safeName = `${track.name.replace(/[/\\?%*:|"<>]/g, '')} - ${track.artist.replace(/[/\\?%*:|"<>]/g, '')}.mp3`;
+              archive.append(buffer, { name: safeName });
             }
-            const buffer = Buffer.concat(chunks);
-            archive.append(buffer, { name: safeName });
           }
-        } catch (e) {
-          console.error(`Error packing track: ${track.name}`, e);
+        } catch (e: any) {
+          console.error(`Error packing track: ${track.name}`, e?.message);
         }
       }));
     }

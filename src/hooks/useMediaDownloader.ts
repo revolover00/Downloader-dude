@@ -47,7 +47,20 @@ export function useMediaDownloader() {
         body: JSON.stringify({ url: trimmed }),
       });
 
-      const result = await response.json();
+      const responseText = await response.text();
+      let result;
+      try {
+        result = JSON.parse(responseText);
+      } catch (parseErr) {
+        console.error('[Download JSON Parse Error]:', parseErr, 'Response text:', responseText);
+        setState({
+          loading: false,
+          error: `Server responded with an unexpected response format. Details: ${responseText.substring(0, 150)}`,
+          data: null,
+          spotifyData: null,
+        });
+        return;
+      }
 
       if (!response.ok || !result.success) {
         setState({
@@ -69,7 +82,7 @@ export function useMediaDownloader() {
       console.error('[Download Request Failed]:', err);
       setState({
         loading: false,
-        error: 'Failed to communicate with downloader server. Please check your network and try again.',
+        error: `Failed to communicate with downloader server (${err.message || 'Network Error'}). Please check your connection and try again.`,
         data: null,
         spotifyData: null,
       });
@@ -99,7 +112,20 @@ export function useMediaDownloader() {
         body: JSON.stringify({ url: trimmed }),
       });
 
-      const result = await response.json();
+      const responseText = await response.text();
+      let result;
+      try {
+        result = JSON.parse(responseText);
+      } catch (parseErr) {
+        console.error('[Spotify JSON Parse Error]:', parseErr, 'Response text:', responseText);
+        setState({
+          loading: false,
+          error: `Spotify scraper responded with unexpected format: ${responseText.substring(0, 150)}`,
+          data: null,
+          spotifyData: null,
+        });
+        return;
+      }
 
       if (!response.ok || !result.success) {
         setState({
@@ -121,7 +147,7 @@ export function useMediaDownloader() {
       console.error('[Spotify Meta Retrieval Failed]:', err);
       setState({
         loading: false,
-        error: 'Failed to communicate with Spotify scraper. Please verify your connection status.',
+        error: `Failed to communicate with Spotify scraper (${err.message || 'Network Error'}). Please verify your connection status.`,
         data: null,
         spotifyData: null,
       });

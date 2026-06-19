@@ -65,15 +65,34 @@ export async function proxyDownloadController(req: Request, res: Response): Prom
     }
     
     // Set clean disposition filename to download directly
-    const extension = contentType.includes('video') ? '.mp4' : contentType.includes('image') ? '.jpg' : '.mp4';
+    let extension = '.mp4';
+    if (contentType.includes('audio') || contentType.includes('mpeg')) {
+      extension = '.mp3';
+    } else if (contentType.includes('image')) {
+      extension = '.jpg';
+    } else if (contentType.includes('gif')) {
+      extension = '.gif';
+    } else if (contentType.includes('zip')) {
+      extension = '.zip';
+    }
+
     let safeName = fileName;
-    if (!safeName.endsWith(extension)) {
+    if (!safeName.toLowerCase().endsWith(extension)) {
       safeName += extension;
     }
 
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(safeName)}"`);
 
-    response.data.pipe(res);
+    // Attach error event handler to readable stream to prevent crashing server process
+    const stream = response.data;
+    stream.on('error', (streamErr: any) => {
+      console.error('[ProxyDownload Dynamic Stream Error]:', streamErr.message);
+      if (!res.headersSent) {
+        res.status(500).send('Streaming interrupted: ' + streamErr.message);
+      }
+    });
+
+    stream.pipe(res);
   } catch (error: any) {
     console.error('[ProxyDownload Error]:', error.message);
     if (!res.headersSent) {
