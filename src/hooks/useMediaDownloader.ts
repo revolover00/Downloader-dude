@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { DownloaderResponse, SpotifyResponse, DownloaderState, SpotifyTrack } from '../types';
+import { DownloaderResponse, DownloaderState } from '../types';
 
 export function useMediaDownloader() {
   const [state, setState] = useState<DownloaderState>({
@@ -89,113 +89,13 @@ export function useMediaDownloader() {
     }
   }, []);
 
-  const fetchSpotifyInfo = useCallback(async (targetUrl: string) => {
-    const trimmed = targetUrl.trim();
-    if (!trimmed) {
-      setState({
-        loading: false,
-        error: 'Please enter a Spotify link first.',
-        data: null,
-        spotifyData: null,
-      });
-      return;
-    }
-
-    setState({ loading: true, error: null, data: null, spotifyData: null });
-
-    try {
-      const response = await fetch('/api/spotify/playlist-info', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ url: trimmed }),
-      });
-
-      const responseText = await response.text();
-      let result;
-      try {
-        result = JSON.parse(responseText);
-      } catch (parseErr) {
-        console.error('[Spotify JSON Parse Error]:', parseErr, 'Response text:', responseText);
-        setState({
-          loading: false,
-          error: `Spotify scraper responded with unexpected format: ${responseText.substring(0, 150)}`,
-          data: null,
-          spotifyData: null,
-        });
-        return;
-      }
-
-      if (!response.ok || !result.success) {
-        setState({
-          loading: false,
-          error: result.error || 'Failed to parse Spotify tracks. Double check the Spotify URL matches public content.',
-          data: null,
-          spotifyData: null,
-        });
-        return;
-      }
-
-      setState({
-        loading: false,
-        error: null,
-        data: null,
-        spotifyData: result as SpotifyResponse,
-      });
-    } catch (err: any) {
-      console.error('[Spotify Meta Retrieval Failed]:', err);
-      setState({
-        loading: false,
-        error: `Failed to communicate with Spotify scraper (${err.message || 'Network Error'}). Please verify your connection status.`,
-        data: null,
-        spotifyData: null,
-      });
-    }
-  }, []);
-
-  const downloadSpotifyTracksAsZip = useCallback(async (tracks: SpotifyTrack[], playlistName: string) => {
-    setState(prev => ({ ...prev, loading: true, error: null }));
-    try {
-      const response = await fetch('/api/spotify/download-playlist', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ tracks, playlistName }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to pack tracks on server side');
-      }
-
-      const blob = await response.blob();
-      const downloadUrl = window.URL.createObjectURL(blob);
-      const anchorNode = document.createElement('a');
-      anchorNode.href = downloadUrl;
-      anchorNode.download = `${playlistName.replace(/[/\\?%*:|"<>]/g, '') || 'spotify_playlist'}.zip`;
-      document.body.appendChild(anchorNode);
-      anchorNode.click();
-      anchorNode.remove();
-      window.URL.revokeObjectURL(downloadUrl);
-
-      setState(prev => ({ ...prev, loading: false }));
-    } catch (err: any) {
-      console.error('[Spotify Zip Compilation Failed]:', err);
-      setState(prev => ({ ...prev, loading: false, error: 'Could not bundle playlist songs into ZIP format.' }));
-    }
-  }, []);
-
   return {
     url,
     setUrl: handleUrlChange,
     loading: state.loading,
     error: state.error,
     data: state.data,
-    spotifyData: state.spotifyData,
     downloadMedia,
-    fetchSpotifyInfo,
-    downloadSpotifyTracksAsZip,
     clearResult,
   };
 }
