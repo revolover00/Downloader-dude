@@ -1,6 +1,9 @@
 import { Request, Response } from 'express';
-import { processDownload, getPlatformReferer } from './downloaderService';
+import { processDownload, getPlatformReferer, isUrlAnImage } from './downloaderService';
 import axios from 'axios';
+import https from 'https';
+import { spawn } from 'child_process';
+import ffmpegStatic from 'ffmpeg-static';
 
 export async function downloadMediaController(req: Request, res: Response): Promise<void> {
   try {
@@ -62,6 +65,7 @@ function resolveExtension(type?: string, format?: string): string {
 export async function proxyDownloadController(req: Request, res: Response): Promise<void> {
   const targetUrl = req.query.url as string;
   const fileName = req.query.name as string || 'download';
+  const isInline = req.query.inline === 'true';
   // The frontend already knows the real media type/format from the backend's
   // own extraction step — pass it through explicitly instead of re-detecting
   // it from response headers, which are unreliable for CDN-hosted media.
@@ -93,23 +97,159 @@ export async function proxyDownloadController(req: Request, res: Response): Prom
 
   try {
     const referer = getPlatformReferer(targetUrl);
-    console.log(`[ProxyDownload] Proxying request to: ${targetUrl} (Referer: ${referer})`);
     
+    // Build headers dynamically to mimic a high-fidelity browser request
+    const headers: Record<string, string> = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+      'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8',
+      'Connection': 'keep-alive',
+    };
+
+    const isYouTube = targetUrl.includes('googlevideo.com') || 
+                      targetUrl.includes('youtube.com') || 
+                      targetUrl.includes('youtu.be');
+
+    const isInstagram = targetUrl.includes('cdninstagram.com') || targetUrl.includes('fbcdn.net') || targetUrl.includes('instagram.com');
+    const isTikTok = targetUrl.includes('tiktokcdn.com') || targetUrl.includes('ttwstatic.com') || targetUrl.includes('tiktok.com');
+    const isCDN = isInstagram || isTikTok;
+
+    // Rule 1: CDNs often block requests that contain incorrect referers (hotlink protection).
+    // To bypass this, we MUST pass their official platform referer (e.g. instagram.com for instagram media)
+    // and matching Origin, mimicking requests coming directly from within their official apps/sites.
+    // However, we MUST NOT send these headers for Cobalt's own tunnel URLs, as they do not have hotlink 
+    // protection and strict self-referential Origin/Referer headers might be rejected with a 404 or 403.
+    const isCobaltTunnel = targetUrl.includes('/tunnel');
+    if (referer && !isCobaltTunnel) {
+      headers['Referer'] = referer;
+      try {
+        const refUrl = new URL(referer);
+        headers['Origin'] = refUrl.origin;
+      } catch (e) {}
+    }
+
+    if (isYouTube) {
+      headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
+    }
+
+    // Rule 2: Do NOT manually pass 'Accept-Encoding: gzip, deflate, br' with responseType: 'stream'.
+    // If passed manually, Axios does not decompress the stream, sending raw compressed bytes
+    // to the client or hanging/corrupting files. Let Axios handle stream decompression.
+
+    // Rule 3: Only send Range headers for video and audio content. 
+    // Image servers can reject Range headers with a 416 status or fail.
+    // YouTube stream URLs (googlevideo.com) also can return 403 Forbidden if a manual Range header is sent,
+    // as it conflicts with the URL signature or internal parameters.
+    const isImage = mediaType === 'image' || isUrlAnImage(targetUrl, mediaType);
+    
+    const isHLS = targetUrl.includes('.m3u8');
+    const isDASH = targetUrl.includes('.mpd');
+
+    // Handle HLS (.m3u8) or DASH (.mpd) streams by merging segments using ffmpeg on-the-fly
+    if ((isHLS || isDASH) && !isImage) {
+      console.log(`[ProxyDownload] Detected stream (${isHLS ? 'HLS' : 'DASH'}). Merging via ffmpeg: ${targetUrl}`);
+      
+      const safeName = (fileName || 'video') + '.mp4';
+      res.setHeader('Content-Type', 'video/mp4');
+      if (!isInline) {
+        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(safeName)}"`);
+      } else {
+        res.setHeader('Content-Disposition', 'inline');
+      }
+      res.setHeader('Cache-Control', 'no-cache');
+
+      // Use ffmpeg to download and merge HLS segments into a single MP4 stream
+      // -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 for better stability
+      const ffmpegArgs = [
+        '-y',
+        '-reconnect', '1',
+        '-reconnect_at_eof', '1',
+        '-reconnect_streamed', '1',
+        '-reconnect_delay_max', '10',
+        '-analyzeduration', '20000000',
+        '-probesize', '20000000',
+        '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
+        '-user_agent', headers['User-Agent'],
+        '-headers', Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join('\r\n') + '\r\n',
+        '-i', targetUrl,
+        '-c', 'copy',
+        '-ignore_unknown',
+        '-err_detect', 'ignore_err',
+        '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+        '-metadata', `title=${fileName}`,
+        '-f', 'mp4',
+        'pipe:1'
+      ];
+
+      console.log(`[ProxyDownload] Spawning ffmpeg with args:`, ffmpegArgs.join(' '));
+      const ffmpeg = spawn(ffmpegStatic || 'ffmpeg', ffmpegArgs);
+
+      ffmpeg.stdout.pipe(res);
+
+      ffmpeg.stderr.on('data', (data) => {
+        // Log ffmpeg output for debugging if needed (mostly noisy)
+        // console.log(`ffmpeg: ${data}`);
+      });
+
+      ffmpeg.on('error', (err) => {
+        console.error('[ProxyDownload ffmpeg Error]:', err.message);
+        if (!res.headersSent) {
+          res.status(500).send('Failed to process video: ' + err.message);
+        }
+      });
+
+      ffmpeg.on('close', (code) => {
+        console.log(`[ProxyDownload ffmpeg] process exited with code ${code}`);
+        if (code !== 0 && !res.headersSent) {
+          // res.status(500).send('ffmpeg failed to process stream');
+        }
+        res.end();
+      });
+
+      req.on('close', () => {
+        ffmpeg.kill('SIGKILL');
+      });
+
+      return;
+    }
+
+    // Configure HTTPS agent. We bypass SSL verification for non-YouTube CDNs to avoid certificate issues,
+    // and configure IPv6/IPv4 selection for YouTube.
+    let httpsAgent: any = new https.Agent({ rejectUnauthorized: false });
+
+    if (isYouTube) {
+      try {
+        const urlObj = new URL(targetUrl);
+        const ipParam = urlObj.searchParams.get('ip') || '';
+        const isIPv6 = ipParam.includes(':') || ipParam.includes('%');
+        
+        console.log(`[ProxyDownload] YouTube/GoogleVideo IP detection: ip=${ipParam} | isIPv6=${isIPv6}`);
+        
+        httpsAgent = new https.Agent({
+          family: isIPv6 ? 6 : 4,
+          keepAlive: true,
+          rejectUnauthorized: false
+        });
+      } catch (agentErr: any) {
+        console.error('[ProxyDownload Agent Init Error]:', agentErr.message);
+      }
+    }
+
+    console.log(`[ProxyDownload] Proxying request to: ${targetUrl} | CDN Mode: ${isCDN} | YouTube Mode: ${isYouTube} | Image Mode: ${isImage}`);
+    console.log(`[ProxyDownload] Headers:`, JSON.stringify(headers, null, 2));
+
     const response = await axios({
       method: 'GET',
       url: targetUrl,
       responseType: 'stream',
-      headers: {
-        'Referer': referer,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': '*/*',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-        'Range': 'bytes=0-',
-      },
+      headers,
+      httpsAgent,
       timeout: 30000,
       maxRedirects: 5,
     });
+
+    console.log(`[ProxyDownload] Remote response status: ${response.status}`);
+    console.log(`[ProxyDownload] Remote Content-Type: ${response.headers['content-type']}`);
 
     const remoteContentType = String(response.headers['content-type'] || 'application/octet-stream');
     const contentLength = response.headers['content-length'] ? String(response.headers['content-length']) : undefined;
@@ -184,7 +324,7 @@ export async function proxyDownloadController(req: Request, res: Response): Prom
 
     remoteStream.pipe(res);
   } catch (error: any) {
-    console.error('[ProxyDownload Error]:', error.message);
+    console.error('[ProxyDownload Error]:', error.message, '| URL:', targetUrl);
     cleanup();
     if (!res.headersSent) {
       if (error.response) {

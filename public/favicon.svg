@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="indigo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1" />
+      <stop offset="100%" stop-color="#4f46e5" />
+    </linearGradient>
+  </defs>
+  <!-- Rounded elegant card background -->
+  <rect width="512" height="512" rx="128" fill="url(#indigo-grad)" />
+  <!-- Glossy border effect -->
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="none" stroke="#ffffff" stroke-width="12" stroke-opacity="0.15" />
+  <!-- Clean minimalist download vector arrow -->
+  <path d="M160 352h192v32a16 16 0 0 1-16 16H176a16 16 0 0 1-16-16zm96-224a16 16 0 0 1 16 16v128h54.63c14.26 0 21.4 17.23 11.31 27.31l-70.63 70.63a16 16 0 0 1-22.62 0l-70.63-70.63C162.97 289.23 170.11 272 184.37 272H238V144a16 16 0 0 1 16-16z" fill="#ffffff" />
+</svg>

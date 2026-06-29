@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
-import { Camera, Loader2 } from 'lucide-react';
+import { Camera, Loader2, Play } from 'lucide-react';
 
 interface VideoPlayerProps {
   src: string;
   title?: string;
   index: number;
+  thumbnail?: string | null;
 }
 
-export function VideoPlayer({ src, title = 'download', index }: VideoPlayerProps) {
+export function VideoPlayer({ src, title = 'download', index, thumbnail }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [frameUrl, setFrameUrl] = useState<string | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [frameUrl] = useState<string | null>(thumbnail || null);
   const [capturing, setCapturing] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -17,40 +19,24 @@ export function VideoPlayer({ src, title = 'download', index }: VideoPlayerProps
   const proxiedUrl = `/api/proxy-download?url=${encodeURIComponent(src)}&inline=true&type=video&format=mp4`;
 
   useEffect(() => {
+    if (!isPlaying) {
+      setLoading(false);
+      return;
+    }
+
     const video = videoRef.current;
     if (!video) return;
 
+    setLoading(true);
     const handleLoadedMetadata = () => {
       setLoading(false);
-      // Wait a moment for the first frame to render, then draw the poster
-      setTimeout(captureFirstFrame, 800);
     };
 
     video.addEventListener('loadedmetadata', handleLoadedMetadata);
     return () => {
       video.removeEventListener('loadedmetadata', handleLoadedMetadata);
     };
-  }, [src]);
-
-  const captureFirstFrame = () => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    try {
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth || 480;
-      canvas.height = video.videoHeight || 480;
-      
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-        setFrameUrl(dataUrl);
-      }
-    } catch (err: any) {
-      console.warn('[VideoPlayer] Browser CORS or canvas taint blocked frame capture:', err?.message || String(err));
-    }
-  };
+  }, [src, isPlaying]);
 
   const downloadFrameAsImage = async () => {
     const video = videoRef.current;
@@ -58,21 +44,6 @@ export function VideoPlayer({ src, title = 'download', index }: VideoPlayerProps
 
     setCapturing(true);
     try {
-      const originalTime = video.currentTime;
-      
-      // Seek to t=0.1 to get a clean frame in case t=0 is black
-      video.currentTime = 0.1;
-
-      // Wait brief moment for seek to complete
-      await new Promise((resolve) => {
-        const onSeeked = () => {
-          video.removeEventListener('seeked', onSeeked);
-          resolve(true);
-        };
-        video.addEventListener('seeked', onSeeked);
-        setTimeout(resolve, 500); // Fail-safe
-      });
-
       const canvas = document.createElement('canvas');
       canvas.width = video.videoWidth || 640;
       canvas.height = video.videoHeight || 640;
@@ -91,9 +62,6 @@ export function VideoPlayer({ src, title = 'download', index }: VideoPlayerProps
           URL.revokeObjectURL(downloadUrl);
         }
       }
-
-      // Restore original time
-      video.currentTime = originalTime;
     } catch (err: any) {
       console.error('[VideoPlayer] Capture frame download failed:', err?.message || String(err));
     } finally {
@@ -101,22 +69,68 @@ export function VideoPlayer({ src, title = 'download', index }: VideoPlayerProps
     }
   };
 
+  // Safe image helper
+  const getSafeImageUrl = (url: string) => {
+    if (!url) return '';
+    const lowercase = url.toLowerCase();
+    if (
+      lowercase.includes('cdninstagram') ||
+      lowercase.includes('fbcdn') ||
+      lowercase.includes('tiktokcdn') ||
+      lowercase.includes('byteoversea') ||
+      lowercase.includes('ibyteimg') ||
+      lowercase.includes('twimg') ||
+      lowercase.includes('instagram') ||
+      lowercase.includes('threads.net')
+    ) {
+      return `/api/proxy-download?url=${encodeURIComponent(url)}&inline=true&type=image&name=preview`;
+    }
+    return url;
+  };
+
+  if (!isPlaying) {
+    return (
+      <div 
+        onClick={() => setIsPlaying(true)}
+        className="w-full h-full min-h-[180px] md:min-h-[160px] relative group cursor-pointer bg-slate-950 overflow-hidden flex items-center justify-center rounded-xl border border-slate-800/60"
+      >
+        {frameUrl ? (
+          <img 
+            src={getSafeImageUrl(frameUrl)} 
+            alt={title}
+            referrerPolicy="no-referrer"
+            className="w-full h-full object-cover absolute inset-0 opacity-70 transition-transform duration-300 group-hover:scale-105"
+          />
+        ) : (
+          <div className="absolute inset-0 bg-slate-900/40" />
+        )}
+        
+        {/* Play Icon overlay */}
+        <div className="relative z-10 w-11 h-11 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white flex items-center justify-center shadow-lg transition-transform duration-200 group-hover:scale-110">
+          <Play className="w-4.5 h-4.5 fill-current ml-0.5" />
+        </div>
+        
+        <div className="absolute bottom-1.5 right-2 bg-slate-900/80 backdrop-blur-sm text-[9px] text-slate-300 font-bold px-2 py-0.5 rounded-md border border-slate-700/50">
+          اضغط للتشغيل والمشاهدة
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="w-full h-full relative group">
-      {/* Video Object with #t=0.1 to naturally force rendering frame 1 */}
+    <div className="w-full h-full relative group min-h-[180px] md:min-h-[160px] bg-slate-950 rounded-xl overflow-hidden flex items-center justify-center">
       <video
         ref={videoRef}
-        src={`${proxiedUrl}#t=0.1`}
+        src={proxiedUrl}
         crossOrigin="anonymous"
-        preload="metadata"
+        autoPlay
         controls
         playsInline
-        poster={frameUrl || undefined}
         className="w-full h-full object-contain max-h-48"
       />
 
       {loading && (
-        <div className="absolute inset-0 flex items-center justify-center bg-slate-950/50">
+        <div className="absolute inset-0 flex items-center justify-center bg-slate-950/70">
           <Loader2 className="w-6 h-6 text-indigo-500 animate-spin" />
         </div>
       )}
@@ -126,7 +140,7 @@ export function VideoPlayer({ src, title = 'download', index }: VideoPlayerProps
         <button
           onClick={downloadFrameAsImage}
           disabled={capturing}
-          title="حفظ أول لقطة كصورة"
+          title="حفظ اللقطة الحالية كصورة"
           className="absolute top-2 left-2 bg-slate-900/95 hover:bg-indigo-600 border border-slate-700/80 hover:border-indigo-500 text-white rounded-lg px-2.5 py-1.5 transition-all duration-150 shadow-md group/btn z-10 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
         >
           {capturing ? (

@@ -22,7 +22,7 @@ export function Footer() {
         </p>
 
         <div className="text-[10px] text-slate-500 uppercase tracking-widest font-mono pt-2">
-          &copy; {new Date().getFullYear()} MediaSnap Pro &bull; Stable Engine 100% Online
+          &copy; {new Date().getFullYear()} Downloader dude &bull; Stable Engine 100% Online
         </div>
       </div>
     </footer>

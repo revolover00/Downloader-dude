@@ -1,5 +1,5 @@
-import instagramDownloader from 'instagram-downloader';
-import { downloadMedia as processViaMediaSnap } from 'mediasnap';
+import { instagramGetUrl } from 'instagram-url-direct';
+import { downloadMedia as processViaEngine } from 'mediasnap';
 
 interface InstagramMedia {
   url: string;
@@ -102,61 +102,70 @@ function detectInstagramMediaType(item: any): 'image' | 'video' {
 
 export async function downloadInstagram(url: string): Promise<InstagramMedia[]> {
   try {
-    console.log(`[downloadInstagram] Attempting download using instagram-downloader for: ${url}`);
+    console.log(`[downloadInstagram] Attempting download using instagram-url-direct for: ${url}`);
     
-    let rawMedia: any[] = [];
-
-    // Tries instagram-downloader package first
-    try {
-      const result: any = await withTimeout(instagramDownloader(url), 12000);
-      if (result && result.media_list && result.media_list.length > 0) {
-        rawMedia = result.media_list;
-      }
-    } catch (downloaderErr: any) {
-      console.warn(`[downloadInstagram] instagram-downloader failed:`, downloaderErr.message);
-    }
-
-    // Fallback: Use mediasnap which wraps SnapSave's highly updated social parsing algorithms
-    if (rawMedia.length === 0) {
-      console.log(`[downloadInstagram] Falling back to mediasnap for url: ${url}`);
-      const snapResult = await withTimeout(processViaMediaSnap(url), 15000);
-      if (snapResult && snapResult.success && snapResult.media && snapResult.media.length > 0) {
-        rawMedia = snapResult.media;
-      }
-    }
-
-    if (rawMedia.length === 0) {
-      throw new Error('No media extracted from this post. Make sure it is public.');
-    }
-
-    // Process and filter media
     const media: InstagramMedia[] = [];
 
-    for (const item of rawMedia) {
-      let mediaUrl = item.url || item.link || item.src;
-      if (!mediaUrl || typeof mediaUrl !== 'string') continue;
+    // Primary: try instagram-url-direct package
+    try {
+      const result = await withTimeout(instagramGetUrl(url, { retries: 3, delay: 500 }), 15000);
+      if (result && result.media_details && result.media_details.length > 0) {
+        console.log(`[downloadInstagram] Successfully extracted ${result.media_details.length} media items via instagram-url-direct`);
+        for (const detail of result.media_details) {
+          if (!detail.url) continue;
+          let mediaUrl = detail.url.trim();
+          if (mediaUrl.startsWith('//')) {
+            mediaUrl = 'https:' + mediaUrl;
+          } else if (!mediaUrl.startsWith('http://') && !mediaUrl.startsWith('https://')) {
+            mediaUrl = 'https://' + mediaUrl;
+          }
 
-      // Ensure URL starts with valid protocol
-      mediaUrl = mediaUrl.trim();
-      if (mediaUrl.startsWith('//')) {
-        mediaUrl = 'https:' + mediaUrl;
-      } else if (!mediaUrl.startsWith('http://') && !mediaUrl.startsWith('https://')) {
-        mediaUrl = 'https://' + mediaUrl;
+          const isVideo = detail.type === 'video' || detail.type === 'Clip' || detail.type === 'video_url';
+          media.push({
+            url: mediaUrl,
+            type: isVideo ? 'video' : 'image',
+            format: isVideo ? 'mp4' : 'jpg',
+            quality: isVideo ? '720p' : 'high'
+          });
+        }
       }
+    } catch (downloaderErr: any) {
+      console.warn(`[downloadInstagram] instagram-url-direct failed:`, downloaderErr.message);
+    }
 
-      const mediaType = detectInstagramMediaType(item);
-      const isImage = mediaType === 'image';
+    // Fallback: Use secondary engine which wraps highly updated social parsing algorithms
+    if (media.length === 0) {
+      console.log(`[downloadInstagram] Falling back to secondary engine for url: ${url}`);
+      const snapResult = await withTimeout(processViaEngine(url), 15000);
+      if (snapResult && snapResult.success && snapResult.media && snapResult.media.length > 0) {
+        console.log(`[downloadInstagram] Successfully extracted ${snapResult.media.length} media items via secondary engine fallback`);
+        for (const item of snapResult.media) {
+          const anyItem = item as any;
+          let mediaUrl = anyItem.url || anyItem.link || anyItem.src;
+          if (!mediaUrl || typeof mediaUrl !== 'string') continue;
 
-      media.push({
-        url: mediaUrl,
-        type: mediaType,
-        format: isImage ? 'jpg' : 'mp4',
-        quality: item.quality || (isImage ? 'high' : '720p')
-      });
+          mediaUrl = mediaUrl.trim();
+          if (mediaUrl.startsWith('//')) {
+            mediaUrl = 'https:' + mediaUrl;
+          } else if (!mediaUrl.startsWith('http://') && !mediaUrl.startsWith('https://')) {
+            mediaUrl = 'https://' + mediaUrl;
+          }
+
+          const mediaType = detectInstagramMediaType(anyItem);
+          const isImage = mediaType === 'image';
+
+          media.push({
+            url: mediaUrl,
+            type: mediaType,
+            format: isImage ? 'jpg' : 'mp4',
+            quality: anyItem.quality || (isImage ? 'high' : '720p')
+          });
+        }
+      }
     }
 
     if (media.length === 0) {
-      throw new Error('No valid media elements could be found in the response.');
+      throw new Error('No media extracted from this post. Make sure it is public.');
     }
 
     return media;

@@ -1,5 +1,5 @@
 {
-  "name": "MediaSnap Downloader",
+  "name": "Downloader dude",
   "description": "Download videos, reels, slides, images, and audio from Instagram, TikTok, YouTube Shorts, X (Twitter), Snapchat, and more.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { ExternalLink, Video, Volume2, Image as ImageIcon, FileDown, CheckCircle, Copy, Play, Eye } from 'lucide-react';
 import { DownloaderResponse } from '../types';
 import { VideoPlayer } from './VideoPlayer';
-import { VideoToImageCard } from './VideoToImageCard';
 
 interface DownloadResultProps {
   data: DownloaderResponse;
@@ -13,8 +12,6 @@ export function DownloadResult({ data, selectedPlatformId }: DownloadResultProps
   const [activeTab, setActiveTab] = useState<'all' | 'image' | 'video' | 'audio'>('all');
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [imageErrors, setImageErrors] = useState<Record<string, boolean>>({});
-
-  const isInstagramImagesMode = selectedPlatformId === 'instagram_images';
 
   // Helper to copy links
   const handleCopyLink = async (url: string, index: number) => {
@@ -32,28 +29,17 @@ export function DownloadResult({ data, selectedPlatformId }: DownloadResultProps
   
   // Calculate counts
   const totalCount = mediaItems.length;
-  const rawImageCount = mediaItems.filter(item => item.type === 'image').length;
-  const rawVideoCount = mediaItems.filter(item => item.type === 'video').length;
-  
-  // In Instagram Images mode, videos are transformed to images, so we count them as images!
-  const imageCount = isInstagramImagesMode ? (rawImageCount + rawVideoCount) : rawImageCount;
-  const videoCount = isInstagramImagesMode ? 0 : rawVideoCount;
-  const audioCount = isInstagramImagesMode ? 0 : mediaItems.filter(item => item.type === 'audio').length;
+  const imageCount = mediaItems.filter(item => item.type === 'image').length;
+  const videoCount = mediaItems.filter(item => item.type === 'video').length;
+  const audioCount = mediaItems.filter(item => item.type === 'audio').length;
 
   // Filtered media list based on selected active tab
   const filteredMedia = mediaItems.filter((item) => {
-    if (isInstagramImagesMode) {
-      // Exclude audio if they are in photos only mode
-      return item.type === 'image' || item.type === 'video';
-    }
     if (activeTab === 'all') return true;
     return item.type === activeTab;
   });
 
   const getMediaBadgeLabel = (type: 'video' | 'audio' | 'image') => {
-    if (isInstagramImagesMode && type === 'video') {
-      return { label: 'صورة مستخرجة', color: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20' };
-    }
     switch (type) {
       case 'image':
         return { label: 'صورة', color: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20' };
@@ -82,6 +68,25 @@ export function DownloadResult({ data, selectedPlatformId }: DownloadResultProps
     return parts.length > 0 ? parts.join(' • ') : 'محتوى مستخرج';
   };
 
+  const getSafeImageUrl = (url: string, fallbackName: string = 'preview') => {
+    if (!url) return '';
+    const lowercase = url.toLowerCase();
+    const isCDNDomain = 
+      lowercase.includes('cdninstagram') ||
+      lowercase.includes('fbcdn') ||
+      lowercase.includes('tiktokcdn') ||
+      lowercase.includes('byteoversea') ||
+      lowercase.includes('ibyteimg') ||
+      lowercase.includes('twimg') ||
+      lowercase.includes('instagram') ||
+      lowercase.includes('threads.net');
+    
+    if (isCDNDomain) {
+      return `/api/proxy-download?url=${encodeURIComponent(url)}&inline=true&type=image&name=${encodeURIComponent(fallbackName)}`;
+    }
+    return url;
+  };
+
   const handleImageError = (url: string) => {
     setImageErrors(prev => ({ ...prev, [url]: true }));
   };
@@ -99,7 +104,7 @@ export function DownloadResult({ data, selectedPlatformId }: DownloadResultProps
             {data.thumbnail && !imageErrors[data.thumbnail] ? (
               <div className="relative w-36 h-36 flex-shrink-0 rounded-2xl overflow-hidden border border-slate-700/60 bg-black/40 shadow-xl group">
                 <img 
-                  src={data.thumbnail} 
+                  src={getSafeImageUrl(data.thumbnail, `${data.title || 'cover'}_thumbnail`)} 
                   alt={data.title || "Cover"} 
                   referrerPolicy="no-referrer"
                   loading="lazy"
@@ -208,19 +213,6 @@ export function DownloadResult({ data, selectedPlatformId }: DownloadResultProps
                 const badgeInfo = getMediaBadgeLabel(item.type);
                 const hasImgError = imageErrors[item.url];
 
-                // Render automated high-res screenshot card in Instagram Images mode for video files
-                if (isInstagramImagesMode && item.type === 'video') {
-                  return (
-                    <div key={idx}>
-                      <VideoToImageCard 
-                        src={item.url}
-                        title={data.title || 'download'}
-                        index={idx}
-                      />
-                    </div>
-                  );
-                }
-
                 return (
                   <div 
                     key={idx} 
@@ -235,6 +227,7 @@ export function DownloadResult({ data, selectedPlatformId }: DownloadResultProps
                           src={item.url} 
                           title={data.title || 'download'} 
                           index={idx} 
+                          thumbnail={data.thumbnail}
                         />
                       ) : item.type === 'audio' ? (
                         <div className="flex flex-col items-center justify-center gap-2 p-6 w-full text-slate-400">
@@ -246,7 +239,7 @@ export function DownloadResult({ data, selectedPlatformId }: DownloadResultProps
                         // Image Renderer with Error checking fallback
                         !hasImgError ? (
                           <img 
-                            src={item.url} 
+                            src={getSafeImageUrl(item.url, `${data.title || 'media'}_${idx + 1}`)} 
                             alt={`مستند-${idx}`} 
                             loading="lazy"
                             referrerPolicy="no-referrer"
