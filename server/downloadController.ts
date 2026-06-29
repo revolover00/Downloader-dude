@@ -3,7 +3,6 @@ import { processDownload, getPlatformReferer, isUrlAnImage } from './downloaderS
 import axios from 'axios';
 import https from 'https';
 import { spawn } from 'child_process';
-import ffmpegStatic from 'ffmpeg-static';
 
 export async function downloadMediaController(req: Request, res: Response): Promise<void> {
   try {
@@ -181,8 +180,16 @@ export async function proxyDownloadController(req: Request, res: Response): Prom
         'pipe:1'
       ];
 
-      console.log(`[ProxyDownload] Spawning ffmpeg with args:`, ffmpegArgs.join(' '));
-      const ffmpeg = spawn(ffmpegStatic || 'ffmpeg', ffmpegArgs);
+      let ffmpegPath = 'ffmpeg';
+      try {
+        const ffmpegStaticModule = await import('ffmpeg-static');
+        ffmpegPath = ffmpegStaticModule.default || (ffmpegStaticModule as any);
+      } catch (err: any) {
+        console.warn('[ProxyDownload] Dynamic load of ffmpeg-static failed, falling back to system ffmpeg:', err.message);
+      }
+
+      console.log(`[ProxyDownload] Spawning ffmpeg (${ffmpegPath}) with args:`, ffmpegArgs.join(' '));
+      const ffmpeg = spawn(ffmpegPath, ffmpegArgs);
 
       ffmpeg.stdout.pipe(res);
 

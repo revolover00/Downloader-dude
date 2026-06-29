@@ -2,7 +2,6 @@ import { downloadMedia } from 'mediasnap';
 import { downloadInstagram } from './instagramService';
 import { downloadPinterest } from './pinterestService';
 import axios from 'axios';
-import youtubedl from 'youtube-dl-exec';
 import * as cheerio from 'cheerio';
 import https from 'https';
 import tiktokDl from '@tobyg74/tiktok-api-dl';
@@ -1072,8 +1071,18 @@ export async function processDownload(url: string, platform?: string): Promise<D
   try {
     const platformReferer = getPlatformReferer(trimmed);
     console.log(`[downloaderService] Attempting to extract via yt-dlp: ${trimmed} | Referer: ${platformReferer}`);
+    
+    let youtubedlFn: any;
+    try {
+      const ytdlModule = await import('youtube-dl-exec');
+      youtubedlFn = ytdlModule.default || (ytdlModule as any);
+    } catch (err: any) {
+      console.error('[downloaderService] Cannot load youtube-dl-exec dynamically:', err.message);
+      throw new Error('yt-dlp features are not supported in this serverless environment. Dynamic load failed.');
+    }
+
     const output: any = await withTimeout(
-      youtubedl(trimmed, {
+      youtubedlFn(trimmed, {
         dumpJson: true,
         noCheckCertificates: true,
         noWarnings: true,
