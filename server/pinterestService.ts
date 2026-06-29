@@ -39,7 +39,7 @@ export async function downloadPinterest(url: string): Promise<PinterestResult> {
         'Cache-Control': 'no-cache',
         'Pragma': 'no-cache',
       },
-      timeout: 15000
+      timeout: 4000
     });
 
     const html = response.data;

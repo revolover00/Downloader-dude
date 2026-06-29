@@ -108,7 +108,7 @@ export async function downloadInstagram(url: string): Promise<InstagramMedia[]> 
 
     // Primary: try instagram-url-direct package
     try {
-      const result = await withTimeout(instagramGetUrl(url, { retries: 3, delay: 500 }), 15000);
+      const result = await withTimeout(instagramGetUrl(url, { retries: 2, delay: 300 }), 4000);
       if (result && result.media_details && result.media_details.length > 0) {
         console.log(`[downloadInstagram] Successfully extracted ${result.media_details.length} media items via instagram-url-direct`);
         for (const detail of result.media_details) {
@@ -136,7 +136,7 @@ export async function downloadInstagram(url: string): Promise<InstagramMedia[]> 
     // Fallback: Use secondary engine which wraps highly updated social parsing algorithms
     if (media.length === 0) {
       console.log(`[downloadInstagram] Falling back to secondary engine for url: ${url}`);
-      const snapResult = await withTimeout(processViaEngine(url), 15000);
+      const snapResult = await withTimeout(processViaEngine(url), 4000);
       if (snapResult && snapResult.success && snapResult.media && snapResult.media.length > 0) {
         console.log(`[downloadInstagram] Successfully extracted ${snapResult.media.length} media items via secondary engine fallback`);
         for (const item of snapResult.media) {

@@ -98,8 +98,7 @@ export async function downloadViaCobalt(url: string, platform?: string): Promise
   const id = getYoutubeId(url);
   const thumbnail = id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : null;
   
-  const COBALT_INSTANCES = [
-    // Modern v10 base paths (highest speed and compatibility)
+  const COBALT_V10_INSTANCES = [
     'https://api.cobalt.blackcat.sweeux.org/',
     'https://cobaltapi.kittycat.boo/',
     'https://rue-cobalt.xenon.zone/',
@@ -108,9 +107,10 @@ export async function downloadViaCobalt(url: string, platform?: string): Promise
     'https://cobalt.ignis.space/',
     'https://cobalt.nightly.pw/',
     'https://cobalt.sh/',
-    'https://api.cobalt.tools/',
-    
-    // Legacy / v7 compatibility paths as fallbacks
+    'https://api.cobalt.tools/'
+  ];
+
+  const COBALT_V7_INSTANCES = [
     'https://api.cobalt.blackcat.sweeux.org/api/json',
     'https://cobaltapi.kittycat.boo/api/json',
     'https://rue-cobalt.xenon.zone/api/json',
@@ -122,295 +122,245 @@ export async function downloadViaCobalt(url: string, platform?: string): Promise
     'https://api.cobalt.tools/api/json'
   ];
 
-  let lastError: any = null;
-  let fallbackAudioResult: any = null;
-
   const isYoutube = String(url).toLowerCase().includes('youtube.com') || String(url).toLowerCase().includes('youtu.be');
-
   const headers = {
     'Accept': 'application/json',
     'Content-Type': 'application/json'
   };
 
-  for (const instance of COBALT_INSTANCES) {
+  async function tryInstance(instance: string): Promise<{ instance: string; results: any[] }> {
+    const timeout = 3500;
+    const promises: Promise<any>[] = [];
+
+    if (isYoutube) {
+      promises.push(
+        axios.post(instance, { url }, { headers, timeout })
+          .then(res => ({ success: true, type: 'video', quality: 'الجودة التلقائية الممتازة (Auto Quality)', data: res.data }))
+          .catch(() => null)
+      );
+      promises.push(
+        axios.post(instance, { url, videoQuality: '1080' }, { headers, timeout })
+          .then(res => ({ success: true, type: 'video', quality: '1080p (فيديو عالي الدقة FHD)', data: res.data }))
+          .catch(() => null)
+      );
+      promises.push(
+        axios.post(instance, { url, videoQuality: '720' }, { headers, timeout })
+          .then(res => ({ success: true, type: 'video', quality: '720p (فيديو دقة عالية HD)', data: res.data }))
+          .catch(() => null)
+      );
+      promises.push(
+        axios.post(instance, { url, downloadMode: 'audio', audioFormat: 'mp3' }, { headers, timeout })
+          .then(res => ({ success: true, type: 'audio', quality: 'صوت بجودة عالية (MP3)', data: res.data }))
+          .catch(() => null)
+      );
+    } else {
+      promises.push(
+        axios.post(instance, { url }, { headers, timeout })
+          .then(res => ({ success: true, type: 'auto', quality: 'الدقة الأصلية الكاملة', data: res.data }))
+          .catch(() => null)
+      );
+      const isPureImage = String(url).toLowerCase().includes('twimg.com') || String(url).toLowerCase().includes('format=');
+      if (!isPureImage) {
+        promises.push(
+          axios.post(instance, { url, downloadMode: 'audio', audioFormat: 'mp3' }, { headers, timeout })
+            .then(res => ({ success: true, type: 'audio', quality: 'صوت المنشور (MP3)', data: res.data }))
+            .catch(() => null)
+        );
+      }
+    }
+
+    const resList = await Promise.all(promises);
+    const validResults = resList.filter(r => r !== null && r.data);
+    if (validResults.length === 0) {
+      throw new Error(`Instance ${instance} returned no valid media`);
+    }
+    return { instance, results: validResults };
+  }
+
+  async function firstSuccess(instances: string[]): Promise<{ instance: string; results: any[] }> {
+    return new Promise((resolve, reject) => {
+      let resolved = false;
+      let failedCount = 0;
+      const errors: string[] = [];
+      instances.forEach(instance => {
+        tryInstance(instance)
+          .then(res => {
+            if (!resolved) {
+              resolved = true;
+              resolve(res);
+            }
+          })
+          .catch(err => {
+            failedCount++;
+            errors.push(`${instance}: ${err.message}`);
+            if (failedCount === instances.length) {
+              reject(new Error(errors.join(' | ')));
+            }
+          });
+      });
+    });
+  }
+
+  let winner: { instance: string; results: any[] };
+  try {
+    console.log(`[downloaderService] Racing Batch 1 (V10) Cobalt instances for: ${url}`);
+    winner = await firstSuccess(COBALT_V10_INSTANCES);
+  } catch (batch1Err: any) {
+    console.warn('[downloaderService] Batch 1 Cobalt racing failed:', batch1Err.message);
     try {
-      console.log(`[downloaderService] Attempting Cobalt extraction for: ${url} using instance: ${instance}`);
-      
-      const promises: Promise<any>[] = [];
-
-      if (isYoutube) {
-        // For YouTube, request a safe, non-overlapped subset of qualities to prevent rate-limiting and empty fetch errors
-        // 1. Default / Auto Video (Highest success rate)
-        promises.push(
-          axios.post(instance, { url }, { headers, timeout: 10000 })
-            .then(res => ({
-              success: true,
-              type: 'video',
-              quality: 'الجودة التلقائية الممتازة (Auto Quality)',
-              data: res.data
-            }))
-            .catch((e: any) => {
-              const errorMsg = e.response?.data?.error?.code || e.response?.data?.error || e.message;
-              console.warn(`[downloaderService] Cobalt auto video failed for ${instance}:`, errorMsg);
-              return null;
-            })
-        );
-
-        // 2. FHD 1080p Quality
-        promises.push(
-          axios.post(instance, { url, videoQuality: '1080' }, { headers, timeout: 10000 })
-            .then(res => ({
-              success: true,
-              type: 'video',
-              quality: '1080p (فيديو عالي الدقة FHD)',
-              data: res.data
-            }))
-            .catch((e: any) => {
-              const errorMsg = e.response?.data?.error?.code || e.response?.data?.error || e.message;
-              console.warn(`[downloaderService] Cobalt video 1080p failed for ${instance}:`, errorMsg);
-              return null;
-            })
-        );
-
-        // 3. HD 720p Quality
-        promises.push(
-          axios.post(instance, { url, videoQuality: '720' }, { headers, timeout: 10000 })
-            .then(res => ({
-              success: true,
-              type: 'video',
-              quality: '720p (فيديو دقة عالية HD)',
-              data: res.data
-            }))
-            .catch((e: any) => {
-              const errorMsg = e.response?.data?.error?.code || e.response?.data?.error || e.message;
-              console.warn(`[downloaderService] Cobalt video 720p failed for ${instance}:`, errorMsg);
-              return null;
-            })
-        );
-
-        // 4. MP3 Audio format
-        promises.push(
-          axios.post(instance, { url, downloadMode: 'audio', audioFormat: 'mp3' }, { headers, timeout: 10000 })
-            .then(res => ({
-              success: true,
-              type: 'audio',
-              quality: 'صوت بجودة عالية (MP3)',
-              data: res.data
-            }))
-            .catch((e: any) => {
-              const errorMsg = e.response?.data?.error?.code || e.response?.data?.error || e.message;
-              console.warn(`[downloaderService] Cobalt audio mp3 failed for ${instance}:`, errorMsg);
-              return null;
-            })
-        );
-      } else {
-        // For non-YouTube platforms (Twitter, TikTok, Instagram, etc.):
-        // We ONLY make ONE default request. Passing videoQuality parameter to image/photo/picker posts is invalid
-        // and is the root cause of "error.api.fetch.empty" errors on Cobalt.
-        promises.push(
-          axios.post(instance, { url }, { headers, timeout: 12000 })
-            .then(res => ({
-              success: true,
-              type: 'auto',
-              quality: 'الدقة الأصلية الكاملة',
-              data: res.data
-            }))
-            .catch((e: any) => {
-              const errorMsg = e.response?.data?.error?.code || e.response?.data?.error || e.message;
-              console.warn(`[downloaderService] Cobalt default extraction failed for ${instance}:`, errorMsg);
-              return null;
-            })
-        );
-
-        // Optional: Safe Audio extraction fallback (only for posts that aren't purely images)
-        const isPureImage = String(url).toLowerCase().includes('twimg.com') || String(url).toLowerCase().includes('format=');
-        if (!isPureImage) {
-          promises.push(
-            axios.post(instance, { url, downloadMode: 'audio', audioFormat: 'mp3' }, { headers, timeout: 12000 })
-              .then(res => ({
-                success: true,
-                type: 'audio',
-                quality: 'صوت المنشور (MP3)',
-                data: res.data
-              }))
-              .catch(() => null) // Silently ignore audio-only failures for non-video social media posts
-          );
-        }
-      }
-
-      const allResults = await Promise.all(promises);
-      
-      const mediaItems: MediaItem[] = [];
-      let title = 'YouTube Video';
-      let duration: number | null = null;
-      
-      for (const res of allResults) {
-        if (res && res.data) {
-          // If Cobalt returns a picker (multiple images/photos/videos)
-          if (Array.isArray(res.data.picker)) {
-            console.log(`[downloaderService] Found picker array with ${res.data.picker.length} items`);
-            for (let i = 0; i < res.data.picker.length; i++) {
-              const item = res.data.picker[i];
-              if (item && item.url) {
-                const isPhoto = isUrlAnImage(item.url, item.type);
-                console.log(`[downloaderService] Picker item type resolution for url: ${item.url}, type: ${item.type}, isPhoto: ${isPhoto}`);
-                mediaItems.push({
-                  url: item.url,
-                  type: isPhoto ? 'image' : 'video',
-                  format: isPhoto ? 'jpg' : 'mp4',
-                  quality: isPhoto ? `صورة عالية الدقة ${i + 1}` : `فيديو مدمج ${i + 1}`
-                });
-              }
-            }
-          }
-          // If Cobalt returns a single URL
-          else if (res.data.url) {
-            if (res.data.filename && title === 'YouTube Video') {
-              title = res.data.filename.replace(/\.[^/.]+$/, ''); 
-            }
-            if (res.data.duration && !duration) {
-              duration = res.data.duration;
-            }
-            
-            const isImg = res.data.status === 'image' || 
-                          res.data.type === 'image' || 
-                          res.data.type === 'photo' ||
-                          isUrlAnImage(res.data.url, res.data.type || res.data.status);
-            
-            console.log(`[downloaderService] Cobalt response type resolution: status=${res.data.status}, type=${res.data.type}, url=${res.data.url}, isImg=${isImg}`);
-            
-            let resolvedType: 'image' | 'video' | 'audio' = 'video';
-            if (isImg) {
-              resolvedType = 'image';
-            } else if (res.type === 'audio') {
-              resolvedType = 'audio';
-            } else if (res.type === 'video') {
-              // Verify if it's really a video link
-              const isImgVideo = isUrlAnImage(res.data.url);
-              console.log(`[downloaderService] Type video resolution for url: ${res.data.url}, isImg: ${isImgVideo}`);
-              if (isImgVideo) {
-                resolvedType = 'image';
-              } else {
-                resolvedType = 'video';
-              }
-            } else {
-              // For 'auto' type or unknown, try to detect image first
-              const isImgAuto = isUrlAnImage(res.data.url);
-              console.log(`[downloaderService] Type auto resolution for url: ${res.data.url}, isImg: ${isImgAuto}`);
-              if (isImgAuto) {
-                resolvedType = 'image';
-              } else {
-                resolvedType = 'video';
-              }
-            }
-
-            let format = isImg ? 'jpg' : 'mp4';
-            if (resolvedType === 'audio') {
-              if (res.quality && res.quality.includes('WAV')) format = 'wav';
-              else if (res.quality && res.quality.includes('Opus')) format = 'opus';
-              else format = 'mp3';
-            }
-
-            mediaItems.push({
-              url: res.data.url,
-              type: resolvedType,
-              format,
-              quality: isImg ? 'صورة عالية الجودة' : res.quality
-            });
-          }
-        }
-      }
-      
-      // Deduplicate by URL so we don't display duplicate download options
-      const uniqueMediaItems: MediaItem[] = [];
-      const seenUrls = new Set<string>();
-      for (const item of mediaItems) {
-        if (!seenUrls.has(item.url)) {
-          seenUrls.add(item.url);
-          uniqueMediaItems.push(item);
-        }
-      }
-
-      if (thumbnail && !uniqueMediaItems.some(item => item.url === thumbnail)) {
-        uniqueMediaItems.push({
-          url: thumbnail,
-          type: 'image',
-          format: 'jpg',
-          quality: 'صورة الغلاف (Thumbnail)'
-        });
-      }
-
-      const hasVideo = uniqueMediaItems.some(item => item.type === 'video');
-      const hasAudio = uniqueMediaItems.some(item => item.type === 'audio');
-      const hasImages = uniqueMediaItems.some(item => item.type === 'image');
-
-      if (uniqueMediaItems.length > 0) {
-        if (hasVideo) {
-          return {
-            success: true,
-            platform: platform || 'YouTube',
-            title,
-            description: 'تم الاستخراج بنجاح بجميع الجودات المتوفرة عبر نظام الاحتياطي الثنائي (Double-Tunnel)',
-            thumbnail,
-            duration,
-            media: uniqueMediaItems,
-            options: uniqueMediaItems.map(item => ({
-              url: item.url,
-              quality: item.quality || 'Default',
-              type: item.type
-            }))
-          };
-        } else if (hasImages) {
-          return {
-            success: true,
-            platform: platform || 'Twitter',
-            title: title === 'YouTube Video' ? 'منشور صور / وسائط متعددة' : title,
-            description: 'تم استخراج الصور بنجاح بأعلى جودة متوفرة',
-            thumbnail: thumbnail || uniqueMediaItems[0].url,
-            duration: null,
-            media: uniqueMediaItems,
-            options: uniqueMediaItems.map(item => ({
-              url: item.url,
-              quality: item.quality || 'صورة عالية الجودة',
-              type: item.type
-            }))
-          };
-        } else if (hasAudio) {
-          if (!fallbackAudioResult) {
-            fallbackAudioResult = {
-              success: true,
-              platform: platform || 'YouTube',
-              title,
-              description: 'تم استخراج الصوت بنجاح بجميع الصيغ المتوفرة (فشل جلب الفيديو من هذا الخادم وجاري البحث في خوادم بديلة)',
-              thumbnail,
-              duration,
-              media: uniqueMediaItems,
-              options: uniqueMediaItems.map(item => ({
-                url: item.url,
-                quality: item.quality || 'Default',
-                type: item.type
-              }))
-            };
-          }
-          console.warn(`[downloaderService] Cobalt instance ${instance} only returned audio. Continuing loop to search for video or images...`);
-        }
-      } else {
-        throw new Error('لم يتم العثور على وسائط قابلة للتحميل عبر هذه النسخة من Cobalt');
-      }
-    } catch (err: any) {
-      console.warn(`[downloaderService] Cobalt instance ${instance} failed:`, err.message);
-      lastError = err;
+      console.log(`[downloaderService] Racing Batch 2 (V7) Cobalt instances for: ${url}`);
+      winner = await firstSuccess(COBALT_V7_INSTANCES);
+    } catch (batch2Err: any) {
+      console.error('[downloaderService] Batch 2 Cobalt racing also failed:', batch2Err.message);
+      throw new Error('جميع خوادم استخراج الوسائط الاحتياطية غير متوفرة حالياً.');
     }
   }
 
-  // If we finished the loop and have no video but found audio fallback, return that!
-  if (fallbackAudioResult) {
-    console.log('[downloaderService] No Cobalt instance could extract video, returning fallback audio-only result.');
-    fallbackAudioResult.description = 'تم استخراج الصوت بنجاح (تعذر جلب الفيديو من جميع الخوادم حالياً بسبب قيود جغرافية من يوتيوب)';
-    return fallbackAudioResult;
-  }
+  console.log(`[downloaderService] Cobalt winner instance: ${winner.instance}`);
   
-  throw new Error('Cobalt service error: ' + (lastError?.message || 'جميع خوادم Cobalt الاحتياطية غير متوفرة حالياً'));
+  const mediaItems: MediaItem[] = [];
+  let title = 'YouTube Video';
+  let duration: number | null = null;
+
+  for (const res of winner.results) {
+    if (res && res.data) {
+      if (Array.isArray(res.data.picker)) {
+        console.log(`[downloaderService] Found picker array with ${res.data.picker.length} items`);
+        for (let i = 0; i < res.data.picker.length; i++) {
+          const item = res.data.picker[i];
+          if (item && item.url) {
+            const isPhoto = isUrlAnImage(item.url, item.type);
+            mediaItems.push({
+              url: item.url,
+              type: isPhoto ? 'image' : 'video',
+              format: isPhoto ? 'jpg' : 'mp4',
+              quality: isPhoto ? `صورة عالية الدقة ${i + 1}` : `فيديو مدمج ${i + 1}`
+            });
+          }
+        }
+      } else if (res.data.url) {
+        if (res.data.filename && title === 'YouTube Video') {
+          title = res.data.filename.replace(/\.[^/.]+$/, ''); 
+        }
+        if (res.data.duration && !duration) {
+          duration = res.data.duration;
+        }
+        
+        const isImg = res.data.status === 'image' || 
+                      res.data.type === 'image' || 
+                      res.data.type === 'photo' ||
+                      isUrlAnImage(res.data.url, res.data.type || res.data.status);
+        
+        let resolvedType: 'image' | 'video' | 'audio' = 'video';
+        if (isImg) {
+          resolvedType = 'image';
+        } else if (res.type === 'audio') {
+          resolvedType = 'audio';
+        } else if (res.type === 'video') {
+          const isImgVideo = isUrlAnImage(res.data.url);
+          if (isImgVideo) {
+            resolvedType = 'image';
+          } else {
+            resolvedType = 'video';
+          }
+        } else {
+          const isImgAuto = isUrlAnImage(res.data.url);
+          if (isImgAuto) {
+            resolvedType = 'image';
+          } else {
+            resolvedType = 'video';
+          }
+        }
+
+        let format = isImg ? 'jpg' : 'mp4';
+        if (resolvedType === 'audio') {
+          if (res.quality && res.quality.includes('WAV')) format = 'wav';
+          else if (res.quality && res.quality.includes('Opus')) format = 'opus';
+          else format = 'mp3';
+        }
+
+        mediaItems.push({
+          url: res.data.url,
+          type: resolvedType,
+          format,
+          quality: isImg ? 'صورة عالية الجودة' : res.quality
+        });
+      }
+    }
+  }
+
+  const uniqueMediaItems: MediaItem[] = [];
+  const seenUrls = new Set<string>();
+  for (const item of mediaItems) {
+    if (!seenUrls.has(item.url)) {
+      seenUrls.add(item.url);
+      uniqueMediaItems.push(item);
+    }
+  }
+
+  if (thumbnail && !uniqueMediaItems.some(item => item.url === thumbnail)) {
+    uniqueMediaItems.push({
+      url: thumbnail,
+      type: 'image',
+      format: 'jpg',
+      quality: 'صورة الغلاف (Thumbnail)'
+    });
+  }
+
+  const hasVideo = uniqueMediaItems.some(item => item.type === 'video');
+  const hasAudio = uniqueMediaItems.some(item => item.type === 'audio');
+  const hasImages = uniqueMediaItems.some(item => item.type === 'image');
+
+  if (uniqueMediaItems.length > 0) {
+    if (hasVideo) {
+      return {
+        success: true,
+        platform: platform || 'YouTube',
+        title,
+        description: 'تم الاستخراج بنجاح بجميع الجودات المتوفرة عبر نظام الاحتياطي الثنائي (Double-Tunnel)',
+        thumbnail,
+        duration,
+        media: uniqueMediaItems,
+        options: uniqueMediaItems.map(item => ({
+          url: item.url,
+          quality: item.quality || 'Default',
+          type: item.type
+        }))
+      };
+    } else if (hasImages) {
+      return {
+        success: true,
+        platform: platform || 'Twitter',
+        title: title === 'YouTube Video' ? 'منشور صور / وسائط متعددة' : title,
+        description: 'تم استخراج الصور بنجاح بأعلى جودة متوفرة',
+        thumbnail: thumbnail || uniqueMediaItems[0].url,
+        duration: null,
+        media: uniqueMediaItems,
+        options: uniqueMediaItems.map(item => ({
+          url: item.url,
+          quality: item.quality || 'صورة عالية الجودة',
+          type: item.type
+        }))
+      };
+    } else if (hasAudio) {
+      return {
+        success: true,
+        platform: platform || 'YouTube',
+        title,
+        description: 'تم استخراج الصوت بنجاح بجميع الصيغ المتوفرة (فشل جلب الفيديو من هذا الخادم وجاري البحث في خوادم بديلة)',
+        thumbnail,
+        duration,
+        media: uniqueMediaItems,
+        options: uniqueMediaItems.map(item => ({
+          url: item.url,
+          quality: item.quality || 'Default',
+          type: item.type
+        }))
+      };
+    }
+  }
+
+  throw new Error('لم يتم العثور على وسائط قابلة للتحميل عبر خوادم Cobalt المتوفرة حالياً.');
 }
 
 // Wraps a promise with a hard timeout so that a hung extraction call
@@ -1092,7 +1042,7 @@ export async function processDownload(url: string, platform?: string): Promise<D
         format: 'bestvideo+bestaudio/best',
         addHeader: [`referer:${platformReferer}`, 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36']
       }),
-      45000,
+      4000,
       'جلب بيانات الوسائط (yt-dlp)'
     );
 
@@ -1202,7 +1152,7 @@ export async function processDownload(url: string, platform?: string): Promise<D
       console.log('[downloaderService] Falling back to secondary library engine...');
       const fallbackResult = await withTimeout(
         downloadMedia(trimmed),
-        25000,
+        4000,
         'جلب البيانات (احتياطي)'
       );
 
