@@ -7,9 +7,10 @@ interface SearchInputProps {
   loading: boolean;
   onSubmit: (url: string) => void;
   onClear: () => void;
+  placeholder?: string;
 }
 
-export function SearchInput({ url, setUrl, loading, onSubmit, onClear }: SearchInputProps) {
+export function SearchInput({ url, setUrl, loading, onSubmit, onClear, placeholder }: SearchInputProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [showPasteTip, setShowPasteTip] = useState(false);
 
@@ -53,8 +54,9 @@ export function SearchInput({ url, setUrl, loading, onSubmit, onClear }: SearchI
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             disabled={loading}
-            placeholder="Paste TikTok, Twitter, Instagram or YouTube URL here..."
-            className="w-full bg-transparent text-sm md:text-base text-slate-100 placeholder:text-slate-600 outline-none border-none py-2.5 md:py-3.5"
+            placeholder={placeholder || "Paste TikTok, Twitter, Instagram or YouTube URL here..."}
+            className="w-full bg-transparent text-sm md:text-base text-slate-100 placeholder:text-slate-600 outline-none border-none py-2.5 md:py-3.5 text-right font-sans"
+            dir="rtl"
             required
           />
 

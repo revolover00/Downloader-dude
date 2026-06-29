@@ -1,0 +1,17 @@
+{
+  "name": "Downloader dude - تحميل ريلز، فيديوهات وصور",
+  "short_name": "Downloader dude",
+  "description": "أداة سريعة لتحميل الفيديو والصور من إنستغرام، تيك توك، يوتيوب، وتويتر بجودة عالية وبدون علامة مائية.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#09090b",
+  "theme_color": "#4f46e5",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

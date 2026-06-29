@@ -1,0 +1,11 @@
+# robots.txt for Downloader dude
+User-agent: *
+Allow: /
+
+# Exclude sensitive paths and APIs
+Disallow: /api/
+Disallow: /admin/
+Disallow: /auth/
+Disallow: /_/
+
+Sitemap: https://downloaderdude.com/sitemap.xml
